@@ -1,0 +1,123 @@
+---
+- hosts: webservers
+  become: yes
+  tasks:
+  - name: Update and upgrade apt packages
+    apt:
+      upgrade: yes
+      update_cache: yes
+      cache_valid_time: 86400 #One day
+  - name: "Install Java"
+    apt:
+      name: openjdk-8-jdk
+      state: present
+- hosts: node1
+  become: yes
+  tasks:
+  - name: Update and upgrade apt packages
+    apt:
+      upgrade: yes
+      update_cache: yes
+      cache_valid_time: 86400 #One day
+  - name: "Install Java"
+    apt:
+      name: openjdk-8-jdk
+      state: present
+  - name: "Install Jenkins on Node1"
+    apt_key: url=https://pkg.jenkins.io/debian-stable/jenkins.io.key state=present
+  - name: ensure the repository is configured
+    apt_repository: repo='deb https://pkg.jenkins.io/debian-stable binary/' state=present
+  - name: "Check Jenkins is installed"
+    apt: name=jenkins update_cache=yes
+    become: yes
+  - name: "Start the Jenkins service"
+    service: name=jenkins state=started
+  - name: "Pause for 10 seconds"
+    pause:
+      seconds: 10
+  - name: "Get Jenkins initial Admin Password"
+    shell: "cat /var/lib/jenkins/secrets/initialAdminPassword"
+    changed_when: false
+    register: result
+  - name: "Echo the password"
+    debug:
+     var: result.stdout
+- hosts: webservers
+  become: yes
+  tasks:
+  - name: add tomcatuser
+    user:
+      name: tomcat
+      shell: /sbin/nologin
+  - name: get_installer
+    get_url:
+     url: https://archive.apache.org/dist/tomcat/tomcat-8/v8.5.9/bin/apache-tomcat-8.5.9.tar.gz
+     dest: /tmp/
+    become: yes
+    become_user: root
+  - name: copy
+    command: cp -p /tmp/apache-tomcat-8.5.9.tar.gz /root/
+  - name: install
+    unarchive:
+     src: /root/apache-tomcat-8.5.9.tar.gz
+     dest: /root
+     remote_src: yes
+    become: yes
+    become_user: root
+  - name: Change file ownership, group and permissions
+    file:
+      path: /root/apache-tomcat-8.5.9
+      owner: root
+      group: root
+      recurse: yes
+      state: directory
+  - name: make tomcat symbolic
+    file:
+      src: /root/apache-tomcat-8.5.9
+      dest: /root/tomcat8
+      owner: root
+      group: root
+      state: link
+      force: yes
+  - name: make tomcat-service
+    file:
+      path: /etc/systemd/system/tomcat.service
+      state: touch
+  - name: edit tomcat-service
+    blockinfile:
+      dest: /etc/systemd/system/tomcat-service
+      insertafter:
+      block: |
+        [Unit]
+        Description = Apache Tomcat 8
+        After = syslog.target network.target
+        [Service]
+        User = root
+        Group = root
+        Type = oneshot
+        PIDFile = /root/apache-tomcat-8.5.9/tomcat.pid
+        RemainAfterExit = yes
+        ExecStart = /root/apache-tomcat-8.5.9/bin/startup.sh
+        ExecStop = /root/apache-tomcat-8.5.9/bin/shutdown.sh
+        ExecReStart = /root/apache-tomcat-8.5.9/bin/shutdown.sh;/root/apache-tomcat-8.5.9/bin/startup.sh
+        [Install]
+        WantedBy = multi-user.target
+  - name: chmod 755 tomcat.service
+    file:
+      path: /etc/systemd/system/tomcat.service
+      mode: 0755
+  - name: edit tomcat-users.xml
+    blockinfile:
+      dest: /root/apache-tomcat-8.5.9/conf/tomcat-users.xml
+      insertafter: <tomcat-users>
+      block: |
+        <role rolename = "admin-gui" />
+        <role rolename = "manager-gui" />
+        <user username = "tomcat" password = "P@ssw0rd123" roles = "admin-gui, manager-gui" />
+  - name: start tomcat
+    systemd:
+      name: tomcat.service
+      state: started
+      daemon_reload: yes
+      enabled: yes
+    become: yes
