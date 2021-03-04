@@ -1,0 +1,109 @@
+---
+- name: Create EC2 Instance
+  hosts: localhost
+  gather_facts: true
+  tasks:
+  - name: Get Info Block
+    block:
+      - name: Get Running Instance Info
+        ec2_instance_info:
+          filters:
+            availability-zone: ap-southeast-2a
+          region: us-east-2
+        register: ec2info
+      - name: Print Info
+        debug: var="ec2info.instances"
+    tags: ['always', 'getinfoonly']
+  - name: Create subnet for database servers
+    amazon.aws.ec2_vpc_subnet:
+      state: present
+      region: us-east-2
+      vpc_id: vpc-821bacf8
+      cidr: 172.31.17.0/24
+      tags:
+        Name: devops Subnet
+    tags: ['never','sn-create']
+  - name: Create EC2 Block
+    block:
+      - name: Launch Test App Server
+        tags: create_ec2
+        ec2:
+          region: us-east-2
+          key_name: devopskeypair
+          instance_type: t2.micro
+          image: ami-08962a4068733a2b6
+          wait: yes
+          wait_timeout: 500
+          count: 1
+          instance_tags:
+            name: appservers
+            os: ubuntu
+          monitoring: no
+          vpc_subnet_id: subnet-97c5fada 
+          assign_public_ip: yes
+          group_id: sg-062e5d39e31a7d10c
+        register: testvm
+        delegate_to: localhost
+      - name : Add instance to host group
+        add_host:
+          hostname: "{{ item.public_ip }}"
+          groupname: launched
+        loop: "{{ testvm.instances }}"
+      - name: Update Ansible Hosts File
+        blockinfile:
+          path: /etc/ansible/hosts
+          insertafter: "#This is appservers host"
+          block: |
+            {{ item.public_ip }}
+        loop: "{{ testvm.instances }}"
+      - name: Wait for SSH to come up
+        local_action:
+          module: wait_for
+          host: "{{ item.public_ip }}"
+          port: 22
+          delay: 300
+          timeout: 300
+        loop: "{{ testvm.instances }}"
+    tags: ['never', 'ec2-create-test']
+  - name: Create EC2 Block
+    block:
+      - name: Create PROD App Server
+        tags: create_ec2
+        ec2:
+          region: us-east-2
+          key_name: devopskeypair
+          instance_type: t2.micro
+          image: ami-08962a4068733a2b6
+          wait: yes
+          wait_timeout: 500
+          count: 1
+          instance_tags:
+            name: appservers
+            os: ubuntu
+          monitoring: no
+          vpc_subnet_id: subnet-97c5fada
+          assign_public_ip: yes
+          group_id: sg-062e5d39e31a7d10c
+        register: prodvm
+        delegate_to: localhost
+      - name: Add instance to host group
+        add_host:
+          hostname: "{{ item.public_ip }}"
+          groupname: launched
+        loop: "{{ prodvm.instances }}"
+      - name: Add IP in hosts file group under appserver
+        blockinfile:
+          dest: /etc/ansible/hosts
+          inserafter: "#This is appservers host"
+          block: |
+            {{ item.public_ip }}
+          loop: "{{ prodvm.instances}}"
+      - name: Wait for SSH to come up
+        local_action:
+          module: wait_for
+          host: "{{ item.public_ip }}"
+          port: 22
+          delay: 300
+          timeout: 300
+        loop: "{{ prodvm.instances }}"
+    tags: ['never', 'ec2-create-prod']
